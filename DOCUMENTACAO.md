@@ -1,25 +1,60 @@
 # Documentação
 
 ## Visão geral
-O projeto tem três módulos independentes, ligados por uma CLI (`main.go`):
+O projeto é um app desktop feito com Wails: o back-end é Go e a interface é React.
 
-| Pasta        | Função                                                         |
-|--------------|----------------------------------------------------------------|
-| `simulator/` | Simula o escalonamento de processos (PCB, estados, algoritmos) |
-| `winproc/`   | Lista processos e threads reais do Windows                     |
-| `compare/`   | Compara goroutines com threads do SO                           |
+| Pasta / arquivo | Função                                                                 |
+|-----------------|------------------------------------------------------------------------|
+| `simulator/`    | Simula o escalonamento de processos (PCB, estados, algoritmos)         |
+| `winproc/`      | Lista processos e threads reais do Windows                             |
+| `compare/`      | Compara goroutines com threads do SO                                   |
+| `app.go`        | Métodos Go expostos ao React (`ListProcesses`, `ListThreads`, `Simulate`, `Compare`) |
+| `main.go`       | Inicia a janela do Wails e embute o front-end no `.exe`                |
+| `frontend/`     | Interface React + TypeScript + Tailwind + shadcn/ui                    |
+| `cmd/cli/`      | CLI de texto (comandos sim, list, threads e compare)                   |
 
 ## Estrutura
 ```
-main.go                      CLI (comandos sim, list, threads e compare)
-simulator/process.go         PCB e estados
-simulator/scheduler.go       Algoritmos de escalonamento
-winproc/winproc_windows.go   Listagem de processos (Windows)
-winproc/winproc_other.go     Versão para outros SOs (retorna erro)
-winproc/priority.go          Nome textual das prioridades de thread
-compare/compare.go           Benchmark goroutines vs threads do SO
+main.go                          Janela Wails (título, tamanho, assets embutidos)
+app.go                           API Go chamada pelo React
+wails.json                       Configuração do projeto Wails
+simulator/process.go             PCB e estados
+simulator/scheduler.go           Algoritmos de escalonamento
+winproc/winproc_windows.go       Listagem de processos e threads (Windows)
+winproc/winproc_other.go         Versão para outros SOs (retorna erro)
+winproc/priority.go              Nome textual das prioridades de thread
+compare/compare.go               Benchmark goroutines vs threads do SO
+cmd/cli/main.go                  CLI de texto
+frontend/src/App.tsx             Layout e abas
+frontend/src/components/         Simulator, ProcessList, Compare, Gantt
+frontend/src/components/ui/      Componentes shadcn/ui
+frontend/wailsjs/                Bindings gerados automaticamente (não editar)
 ```
 
+## app.go (ponte Go <-> React)
+Os métodos públicos de `App` ficam disponíveis no React por `frontend/wailsjs/go/main/App`
+(regenerado por `wails build` e `wails dev`).
+
+| Método                                   | O que faz                                                                  |
+|------------------------------------------|----------------------------------------------------------------------------|
+| `ListProcesses()`                        | Processos reais do Windows ordenados por PID (`winproc.List`)              |
+| `ListThreads(pid)`                       | Threads do processo, com prioridade efetiva (base + delta) e nome do nível |
+| `Simulate(policy, quantum, processos)`   | Valida a entrada, roda o escalonador e devolve timeline e métricas         |
+| `Compare(n, work)`                       | Roda `compare.Run` para `goroutine` e `thread` e devolve os tempos em ms   |
+
+Validações: `Simulate` exige política `rr` ou `priority`, quantum >= 1, burst >= 1, chegada >= 0 e, quando há E/S,
+`1 <= IOAfter < Burst`. `Compare` limita `n` a 5000 tarefas e `work` a 50.000.000 iterações.
+Os tipos `ProcessInput`, `ProcessResult`, `SimulationResult`, `ThreadRow` e `CompareRow` definem o JSON trocado com o React.
+
+## Front-end (frontend/src)
+
+| Arquivo                      | Função                                                                      |
+|------------------------------|-----------------------------------------------------------------------------|
+| `App.tsx`                    | Cabeçalho e as abas "Simulador", "Processos e threads" e "Goroutines vs threads" |
+| `components/Simulator.tsx`   | Algoritmo/quantum, tabela editável de processos (com E/S), botão Simular, Gantt e métricas |
+| `components/Gantt.tsx`       | Barra colorida da linha do tempo da CPU, escala de ticks e legenda          |
+| `components/ProcessList.tsx` | Tabela dos processos reais com filtro e modo "ao vivo" (2 s); ao clicar em um processo mostra suas threads |
+| `components/Compare.tsx`     | Executa a comparação e mostra tabela e barras (lançamento, total, threads do SO, pilhas) |
 ## simulator/process.go
 
 ### `type State`
@@ -112,7 +147,9 @@ Cria `n` tarefas que esperam uma largada comum e depois fazem `iters` iteraçõe
 
 As threads criadas são contadas pelo perfil `threadcreate` do `runtime/pprof` (funciona em qualquer SO).
 
-## main.go
+## cmd/cli/main.go
+
+CLI de texto, útil para testar os módulos sem a interface.
 
 ### `sim`
 Roda o simulador com uma carga fixa de 4 processos (`editor` faz E/S após 1 tick por 2 ticks e `compiler` após 3 ticks por 3 ticks) e imprime a linha do tempo,
@@ -143,11 +180,15 @@ Roda `compare.Run` para `goroutine` e `thread` e imprime uma tabela (lançamento
 
 ## Como compilar e rodar
 ```
-go build -o sofinal.exe .
-./sofinal.exe sim -policy rr -quantum 2
-./sofinal.exe sim -policy priority
-./sofinal.exe list
-./sofinal.exe threads -pid 1234
-./sofinal.exe compare -n 1000
+wails build
+./build/bin/sofinal.exe
+```
+Para a CLI de texto:
+```
+go build -o cli.exe ./cmd/cli
+./cli.exe sim -policy rr -quantum 2
+./cli.exe threads -pid 1234
+./cli.exe compare -n 1000
 ```
 > Use `go build` em vez de `go run`: o Windows pode bloquear o executável temporário do `go run`.
+> Pelo mesmo motivo o `wails dev` e o gerador de bindings podem falhar; use `wails build -skipbindings` se a API Go não mudou.

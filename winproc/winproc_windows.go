@@ -6,11 +6,11 @@ import (
 )
 
 type Info struct {
-	PID          uint32
-	ParentPID    uint32
-	Threads      uint32
-	BasePriority int32
-	Name         string
+	PID          uint32 `json:"pid"`
+	ParentPID    uint32 `json:"parentPid"`
+	Threads      uint32 `json:"threads"`
+	BasePriority int32  `json:"basePriority"`
+	Name         string `json:"name"`
 }
 
 func List() ([]Info, error) {
@@ -43,10 +43,10 @@ func List() ([]Info, error) {
 }
 
 type ThreadInfo struct {
-	TID           uint32
-	OwnerPID      uint32
-	BasePriority  int32
-	DeltaPriority int32
+	TID           uint32 `json:"tid"`
+	OwnerPID      uint32 `json:"ownerPid"`
+	BasePriority  int32  `json:"basePriority"`
+	DeltaPriority int32  `json:"deltaPriority"`
 }
 
 type threadEntry32 struct {
