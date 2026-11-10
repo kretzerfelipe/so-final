@@ -5,8 +5,10 @@ import {winproc} from '../models';
 
 export function Compare(arg1:number,arg2:number):Promise<Array<main.CompareRow>>;
 
+export function CompareAlgorithms(arg1:main.SimConfig,arg2:Array<main.ProcessInput>):Promise<Array<main.AlgorithmRow>>;
+
 export function ListProcesses():Promise<Array<winproc.Info>>;
 
 export function ListThreads(arg1:number):Promise<Array<main.ThreadRow>>;
 
-export function Simulate(arg1:string,arg2:number,arg3:Array<main.ProcessInput>):Promise<main.SimulationResult>;
+export function Simulate(arg1:main.SimConfig,arg2:Array<main.ProcessInput>,arg3:Array<main.SimOp>):Promise<main.SimulationResult>;

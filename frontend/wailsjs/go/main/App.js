@@ -6,6 +6,10 @@ export function Compare(arg1, arg2) {
   return window['go']['main']['App']['Compare'](arg1, arg2);
 }
 
+export function CompareAlgorithms(arg1, arg2) {
+  return window['go']['main']['App']['CompareAlgorithms'](arg1, arg2);
+}
+
 export function ListProcesses() {
   return window['go']['main']['App']['ListProcesses']();
 }

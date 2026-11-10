@@ -27,32 +27,61 @@ func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 }
 
-type ProcessInput struct {
-	PID      int    `json:"pid"`
-	Name     string `json:"name"`
-	Priority int    `json:"priority"`
-	Arrival  int    `json:"arrival"`
-	Burst    int    `json:"burst"`
-	IOAfter  int    `json:"ioAfter"`
-	IOTime   int    `json:"ioTime"`
+type SimConfig struct {
+	Policy     string `json:"policy"`
+	Quantum    int    `json:"quantum"`
+	CPUs       int    `json:"cpus"`
+	SwitchCost int    `json:"switchCost"`
 }
 
-type ProcessResult struct {
+type ProcessInput struct {
 	PID        int    `json:"pid"`
 	Name       string `json:"name"`
 	Priority   int    `json:"priority"`
 	Arrival    int    `json:"arrival"`
 	Burst      int    `json:"burst"`
+	IOAfter    int    `json:"ioAfter"`
 	IOTime     int    `json:"ioTime"`
+	Queue      int    `json:"queue"`
+	YieldEvery int    `json:"yieldEvery"`
+	PPID       int    `json:"ppid"`
+}
+
+type SimOp struct {
+	Tick  int    `json:"tick"`
+	PID   int    `json:"pid"`
+	Kind  string `json:"kind"`
+	Value int    `json:"value"`
+}
+
+type ProcessResult struct {
+	PID        int    `json:"pid"`
+	Name       string `json:"name"`
+	Arrival    int    `json:"arrival"`
+	Burst      int    `json:"burst"`
+	Queue      int    `json:"queue"`
 	Finish     int    `json:"finish"`
 	Turnaround int    `json:"turnaround"`
 	Waiting    int    `json:"waiting"`
+	Response   int    `json:"response"`
+	Killed     bool   `json:"killed"`
+	State      string `json:"state"`
+	Kind       string `json:"kind"`
 }
 
 type SimulationResult struct {
-	Timeline   []int           `json:"timeline"`
-	Processes  []ProcessResult `json:"processes"`
-	AvgWaiting float64         `json:"avgWaiting"`
+	Timelines  [][]int           `json:"timelines"`
+	Frames     []simulator.Frame `json:"frames"`
+	QueueNames []string          `json:"queueNames"`
+	Truncated  bool              `json:"truncated"`
+	Metrics    simulator.Metrics `json:"metrics"`
+	Processes  []ProcessResult   `json:"processes"`
+}
+
+type AlgorithmRow struct {
+	Policy  string            `json:"policy"`
+	Metrics simulator.Metrics `json:"metrics"`
+	Error   string            `json:"error"`
 }
 
 type ThreadRow struct {
@@ -100,45 +129,80 @@ func (a *App) ListThreads(pid uint32) ([]ThreadRow, error) {
 	return rows, nil
 }
 
-func (a *App) Simulate(policy string, quantum int, inputs []ProcessInput) (SimulationResult, error) {
-	if policy != string(simulator.RoundRobin) && policy != string(simulator.Priority) {
-		return SimulationResult{}, errors.New("política inválida")
-	}
-	if quantum < 1 {
-		return SimulationResult{}, errors.New("o quantum deve ser maior que zero")
-	}
-	if len(inputs) == 0 {
-		return SimulationResult{}, errors.New("adicione ao menos um processo")
-	}
-
+func buildProcesses(inputs []ProcessInput) []*simulator.Process {
 	procs := make([]*simulator.Process, 0, len(inputs))
 	for _, in := range inputs {
-		if in.Burst < 1 || in.Arrival < 0 {
-			return SimulationResult{}, errors.New("burst deve ser >= 1 e chegada >= 0")
-		}
-		if in.IOTime < 0 || (in.IOTime > 0 && (in.IOAfter < 1 || in.IOAfter >= in.Burst)) {
-			return SimulationResult{}, errors.New("a E/S deve ocorrer após pelo menos 1 tick e antes do fim do burst")
-		}
 		p := simulator.NewProcess(in.PID, in.Name, in.Priority, in.Arrival, in.Burst)
 		if in.IOTime > 0 {
 			p.WithIO(in.IOAfter, in.IOTime)
 		}
-		procs = append(procs, p)
+		procs = append(procs, p.WithQueue(in.Queue).WithYield(in.YieldEvery).WithParent(in.PPID))
+	}
+	return procs
+}
+
+func toConfig(cfg SimConfig) simulator.Config {
+	return simulator.Config{
+		Policy:     simulator.Policy(cfg.Policy),
+		Quantum:    cfg.Quantum,
+		CPUs:       cfg.CPUs,
+		SwitchCost: cfg.SwitchCost,
+	}
+}
+
+func (a *App) Simulate(cfg SimConfig, inputs []ProcessInput, ops []SimOp) (SimulationResult, error) {
+	procs := buildProcesses(inputs)
+	simOps := make([]simulator.Op, 0, len(ops))
+	for _, o := range ops {
+		simOps = append(simOps, simulator.Op{Tick: o.Tick, PID: o.PID, Kind: simulator.OpKind(o.Kind), Value: o.Value})
 	}
 
-	res := simulator.Run(procs, simulator.Policy(policy), quantum)
+	res, err := simulator.RunConfig(procs, toConfig(cfg), simOps)
+	if err != nil {
+		return SimulationResult{}, err
+	}
 
-	out := SimulationResult{Timeline: res.Timeline}
-	totalWait := 0
+	out := SimulationResult{
+		Timelines:  res.Timelines,
+		Frames:     res.Frames,
+		QueueNames: res.QueueNames,
+		Truncated:  res.Truncated,
+		Metrics:    res.Metrics,
+		Processes:  make([]ProcessResult, 0, len(procs)),
+	}
 	for _, p := range procs {
+		kind := "cpu"
+		if p.IOBound() {
+			kind = "io"
+		}
 		out.Processes = append(out.Processes, ProcessResult{
-			PID: p.PID, Name: p.Name, Priority: p.Priority, Arrival: p.Arrival, Burst: p.Burst,
-			IOTime: p.IOTime, Finish: p.Finish, Turnaround: p.Turnaround(), Waiting: p.WaitingTime(),
+			PID: p.PID, Name: p.Name, Arrival: p.Arrival, Burst: p.Burst, Queue: p.Queue,
+			Finish: p.Finish, Turnaround: p.Turnaround(), Waiting: p.WaitingTime(),
+			Response: p.Response(), Killed: p.Killed, State: p.State.String(), Kind: kind,
 		})
-		totalWait += p.WaitingTime()
 	}
-	out.AvgWaiting = float64(totalWait) / float64(len(procs))
 	return out, nil
+}
+
+func (a *App) CompareAlgorithms(cfg SimConfig, inputs []ProcessInput) ([]AlgorithmRow, error) {
+	if len(inputs) == 0 {
+		return nil, errors.New("adicione ao menos um processo")
+	}
+	rows := make([]AlgorithmRow, 0, len(simulator.AllPolicies))
+	for _, policy := range simulator.AllPolicies {
+		c := toConfig(cfg)
+		c.Policy = policy
+		if c.Quantum < 1 {
+			c.Quantum = 2
+		}
+		res, err := simulator.RunConfig(buildProcesses(inputs), c, nil)
+		row := AlgorithmRow{Policy: string(policy), Metrics: res.Metrics}
+		if err != nil {
+			row.Error = err.Error()
+		}
+		rows = append(rows, row)
+	}
+	return rows, nil
 }
 
 func (a *App) Compare(n, work int) ([]CompareRow, error) {
